@@ -22,7 +22,8 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 from gi.repository import Gdk
 import os
-import importlib.util
+#import imp
+import importlib
 import dbus
 import weakref
 from gi.repository import GObject
@@ -30,8 +31,7 @@ from gi.repository import Gio
 from gi.repository import GLib
 from dbus.mainloop.glib import DBusGMainLoop
 from .log import logger
-from .common import Globals
-from .dirutils import get_app_dirs
+from .common import get_app_homedir, Globals
 from . import i18n
 _ = i18n.language.gettext
 
@@ -129,30 +129,29 @@ class DockXApplets():
         self.globals = Globals()
 
     def find_applets(self):
-        # Reads the applets from DATA_DIRS/dockbarx/applets
+        # Reads the applets from /usr/share/dockbarx/applets and
+        # ${XDG_DATA_HOME:-$HOME/.local/share}/dockbarx/applets
         # and returns a dict of the applets file names and paths so that a
         # applet can be loaded.
         self.applets = {}
-        app_dirs = get_app_dirs()
-        applets_dirs = [ os.path.join(d, "applets") for d in app_dirs ]
-        for d in applets_dirs:
-            num_sep = d.count(os.path.sep)
-            for root, dirs, files in os.walk(d):
-                for f in files:
-                    name, ext = os.path.splitext(os.path.basename(f))
-                    if ext.lower() != ".applet":
-                        continue
-                    path = os.path.join(root, f)
-                    applet, err = self.read_applet_file(path)
-                    if err is not None:
-                        logger.debug("Error: Did not load applet from %s: %s" % (path, err))
-                        continue
-                    name = applet["name"]
-                    if name not in self.applets:
-                        applet["dir"] = root
-                        self.applets[name] = applet
-                if num_sep + 1 <= root.count(os.path.sep):
-                    del dirs[:]
+        home_folder = os.path.expanduser("~")
+        applets_folder = os.path.join(get_app_homedir(), "applets")
+        dirs = ["/usr/share/dockbarx/applets", applets_folder]
+        for dir in dirs:
+            if not(os.path.exists(dir) and os.path.isdir(dir)):
+                continue
+            for f in os.listdir(dir):
+                name, ext = os.path.splitext(os.path.split(f)[-1])
+                if not(ext.lower() == ".applet"):
+                    continue
+                path = os.path.join(dir, f)
+                applet, err = self.read_applet_file(path)
+                if err is not None:
+                    logger.debug("Error: Did not load applet from %s: %s" % (path, err))
+                    continue
+                name = applet["name"]
+                applet["dir"] = dir
+                self.applets[name] = applet
 
     def read_applet_file(self, path):
         try:
@@ -194,7 +193,7 @@ class DockXApplets():
             # Remove quote signs
             if value[0] in ("\"", "'") and value[-1] in ("\"", "'"):
                 value = value[1:-1]
-            
+
             if key == "name":
                 name = value
             settings[key] = value
@@ -215,6 +214,7 @@ class DockXApplets():
         iname, ext = os.path.splitext(os.path.split(e)[-1])
         path = os.path.join(self.applets[name]["dir"], e)
         try:
+            #applet = imp.load_source(iname, path)
             spec = importlib.util.spec_from_file_location(iname, path)
             applet = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(applet)
@@ -255,19 +255,19 @@ class DockXApplets():
         while (unused_applets + applet_list).count("Spacer") < 2:
             unused_applets.append("Spacer")
         return unused_applets
-        
-        
+
+
     def set_list(self, applet_list):
         all_applets = list(self.applets.keys()) + ["DockbarX", "Spacer"]
         applet_list = [a for a in applet_list if a in all_applets]
         if not "DockbarX" in applet_list:
             applet_list.append("DockbarX")
         self.globals.set_applets_enabled_list(applet_list)
-        
+
 
 class DockXApplet(Gtk.EventBox):
     """This is the base class for DockX applets"""
-    
+
     __gsignals__ = {"clicked": (GObject.SignalFlags.RUN_FIRST,
                                 None,(Gdk.Event, ))}
 
@@ -346,7 +346,7 @@ class DockXApplet(Gtk.EventBox):
             rel_size = float(dockx.theme.get("rel_size", 100))
             size = dockx.globals.settings["dock/size"]
             return max(size, int(size * rel_size / 100))
-    
+
     def get_size(self):
         if self.__dockx_r:
             return self.__dockx_r().globals.settings["dock/size"]
@@ -361,7 +361,7 @@ class DockXApplet(Gtk.EventBox):
 
     def get_expand(self):
         return self.expand
-        
+
     def get_applet_size(self):
         if not self.__dockx_r:
             return 0
@@ -394,7 +394,7 @@ class DockXApplet(Gtk.EventBox):
 
     def on_button_press_event(self, widget, event):
         self.mouse_pressed = True
-    
+
     def on_leave_notify_event(self, *args):
         self.mouse_pressed = False
 
@@ -403,7 +403,7 @@ class DockXApplet(Gtk.EventBox):
 
     def debug(self, text):
         logger.debug(text)
-        
+
     def destroy(self):
         if self.__settings is not None:
             self.__settings.disconnect(self.__sid)
@@ -474,4 +474,3 @@ class DockXAppletDialog(Gtk.Dialog):
         if self.__settings is not None:
             self.__settings.disconnect(self.__sid)
         super().destroy()
-
